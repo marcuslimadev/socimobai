@@ -170,6 +170,20 @@ function trainingExamplesBlock(body) {
   ].filter(Boolean).join('\n')).join('\n\n');
 }
 
+function hasRealProperties(body) {
+  return Array.isArray(body?.properties) && body.properties.length > 0;
+}
+
+function needsGuidedQualification(body) {
+  const lead = body?.lead && typeof body.lead === 'object' ? body.lead : {};
+
+  return !lead.objetivo_compra
+    || (!lead.localizacao && !lead.preferencia_bairro)
+    || (!lead.budget_max && !lead.budget_min)
+    || !lead.quartos
+    || !lead.prazo_compra;
+}
+
 function enforceSingleQuestion(content) {
   const text = String(content || '').trim();
   const firstQuestion = text.indexOf('?');
@@ -372,6 +386,15 @@ async function huggingFaceChat(body) {
     throw new Error('Resposta invalida do Hugging Face');
   }
 
+  if (!hasRealProperties(body) && /(?:^|\n)\s*(?:1[.)]|1️⃣|2[.)]|2️⃣|3[.)]|3️⃣)|R\$\s*\d|op[cç][oõ]es?:/i.test(content)) {
+    return {
+      ...localTrainedReply(body),
+      provider: 'local-trained',
+      fallback: true,
+      warnings: ['huggingface response discarded because it appeared to invent properties'],
+    };
+  }
+
   return { content: enforceSingleQuestion(content), model, provider: 'huggingface' };
 }
 
@@ -451,6 +474,10 @@ function localTrainedReply(body) {
 
 async function generateChat(body) {
   const errors = [];
+
+  if (!hasRealProperties(body) && needsGuidedQualification(body)) {
+    return localTrainedReply(body);
+  }
 
   if (AI_PROVIDER === 'ollama') {
     const result = await ollamaChat(body);
