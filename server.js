@@ -14,6 +14,9 @@ const API_KEY = String(process.env.SOCIMOB_AI_API_KEY || '').trim();
 const AI_PROVIDER = String(process.env.AI_PROVIDER || 'auto').trim().toLowerCase();
 const OLLAMA_BASE_URL = String(process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/$/, '');
 const DEFAULT_MODEL = String(process.env.OLLAMA_MODEL || 'llama3.1:8b');
+const HF_ROUTER_BASE_URL = String(process.env.HF_ROUTER_BASE_URL || 'https://router.huggingface.co/v1').replace(/\/$/, '');
+const HF_TOKEN = String(process.env.HF_TOKEN || process.env.HUGGINGFACE_TOKEN || '').trim();
+const HF_MODEL = String(process.env.HF_MODEL || 'Qwen/Qwen2.5-7B-Instruct:fastest');
 const POLLINATIONS_BASE_URL = String(process.env.POLLINATIONS_BASE_URL || 'https://text.pollinations.ai/openai').replace(/\/$/, '');
 const POLLINATIONS_MODEL = String(process.env.POLLINATIONS_MODEL || 'openai');
 const POLLINATIONS_API_KEY = String(process.env.POLLINATIONS_API_KEY || '').trim();
@@ -167,6 +170,17 @@ function trainingExamplesBlock(body) {
   ].filter(Boolean).join('\n')).join('\n\n');
 }
 
+function enforceSingleQuestion(content) {
+  const text = String(content || '').trim();
+  const firstQuestion = text.indexOf('?');
+  if (firstQuestion === -1) return text;
+
+  const secondQuestion = text.indexOf('?', firstQuestion + 1);
+  if (secondQuestion === -1) return text;
+
+  return text.slice(0, firstQuestion + 1).trim();
+}
+
 function propertyLine(property) {
   const bedrooms = Number(property?.dormitorios || 0) + Number(property?.suites || 0);
   const rent = Number(property?.valor_aluguel || 0);
@@ -222,6 +236,7 @@ REGRAS OPERACIONAIS SOCIMOB:
 - Nao seja seca, nao pressione e nao repita pergunta respondida.
 - Use o estilo dos exemplos treinados: conduza o atendimento, explique o proximo passo e, quando fizer sentido, sugira exemplos curtos de resposta.
 - Faca no maximo uma pergunta por mensagem.
+- Nao use lista de perguntas. Se faltarem varios dados, escolha somente o dado mais importante agora.
 - Nao invente imoveis: use somente os imoveis reais abaixo.
 - Exemplos de imoveis no treinamento sao apenas referencia de estilo; nunca trate como estoque real.
 - Se o cliente der codigo, data, bairro, quartos, renda ou prazo, reconheca antes de avancar.
@@ -282,7 +297,7 @@ async function ollamaChat(body) {
     throw new Error('Resposta invalida do Ollama');
   }
 
-  return { content: content.trim(), model };
+  return { content: enforceSingleQuestion(content), model };
 }
 
 async function pollinationsChat(body) {
@@ -317,7 +332,47 @@ async function pollinationsChat(body) {
     throw new Error('Resposta invalida da Pollinations');
   }
 
-  return { content: content.trim(), model, provider: 'pollinations' };
+  return { content: enforceSingleQuestion(content), model, provider: 'pollinations' };
+}
+
+async function huggingFaceChat(body) {
+  if (!HF_TOKEN) {
+    throw new Error('HF_TOKEN not configured');
+  }
+
+  const prompt = buildPrompt(body);
+  const model = body.hf_model || HF_MODEL;
+
+  const response = await fetch(`${HF_ROUTER_BASE_URL}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${HF_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      stream: false,
+      temperature: 0.35,
+      max_tokens: Number(body.max_tokens || 260),
+      messages: [
+        { role: 'system', content: prompt.system },
+        { role: 'user', content: prompt.user },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`HuggingFace ${response.status}: ${text.slice(0, 500)}`);
+  }
+
+  const data = await response.json();
+  const content = data?.choices?.[0]?.message?.content;
+  if (!content || typeof content !== 'string') {
+    throw new Error('Resposta invalida do Hugging Face');
+  }
+
+  return { content: enforceSingleQuestion(content), model, provider: 'huggingface' };
 }
 
 function localTrainedReply(body) {
@@ -406,8 +461,18 @@ async function generateChat(body) {
     return pollinationsChat(body);
   }
 
+  if (AI_PROVIDER === 'huggingface' || AI_PROVIDER === 'hf') {
+    return huggingFaceChat(body);
+  }
+
   if (AI_PROVIDER === 'local') {
     return localTrainedReply(body);
+  }
+
+  try {
+    return await huggingFaceChat(body);
+  } catch (error) {
+    errors.push(`huggingface: ${error.message}`);
   }
 
   try {
@@ -449,6 +514,17 @@ app.get('/health', requireAuth, async (_req, res) => {
     });
   }
 
+  if (AI_PROVIDER === 'huggingface' || AI_PROVIDER === 'hf') {
+    return res.json({
+      success: Boolean(HF_TOKEN),
+      provider: 'huggingface',
+      model: HF_MODEL,
+      configured: Boolean(HF_TOKEN),
+      training: trainingHealth,
+      error: HF_TOKEN ? null : 'HF_TOKEN not configured',
+    });
+  }
+
   if (AI_PROVIDER === 'local') {
     return res.json({
       success: true,
@@ -480,6 +556,7 @@ app.get('/health', requireAuth, async (_req, res) => {
         provider: 'auto',
         model: DEFAULT_MODEL,
         ollama_available: false,
+        huggingface_fallback: Boolean(HF_TOKEN),
         pollinations_fallback: true,
         local_fallback: true,
         training: trainingHealth,
