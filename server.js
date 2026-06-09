@@ -1,10 +1,9 @@
 import express from 'express';
-import dotenv from 'dotenv';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-dotenv.config({ override: true });
+loadEnvFile();
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -26,6 +25,34 @@ const TRAINING_FILE = String(
 const MAX_TRAINING_EXAMPLES = Number(process.env.MAX_TRAINING_EXAMPLES || 5);
 
 const training = loadTraining(TRAINING_FILE);
+
+function loadEnvFile(filePath = '.env') {
+  try {
+    if (!fs.existsSync(filePath)) return;
+
+    const lines = fs.readFileSync(filePath, 'utf8').split(/\r?\n/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+
+      const separator = trimmed.indexOf('=');
+      if (separator <= 0) continue;
+
+      const key = trimmed.slice(0, separator).trim();
+      let value = trimmed.slice(separator + 1).trim();
+      if (
+        (value.startsWith('"') && value.endsWith('"'))
+        || (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1);
+      }
+
+      process.env[key] = value;
+    }
+  } catch (error) {
+    console.warn(`Could not load env file ${filePath}: ${error.message}`);
+  }
+}
 
 function requireAuth(req, res, next) {
   if (!API_KEY) return next();
