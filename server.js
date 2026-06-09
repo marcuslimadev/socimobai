@@ -225,7 +225,7 @@ Responda como ${assistantName}:`,
 
 async function ollamaChat(body) {
   const prompt = buildPrompt(body);
-  const model = body.model || DEFAULT_MODEL;
+  const model = body.ollama_model || DEFAULT_MODEL;
 
   const response = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
     method: 'POST',
@@ -260,7 +260,7 @@ async function ollamaChat(body) {
 
 async function pollinationsChat(body) {
   const prompt = buildPrompt(body);
-  const model = body.model || POLLINATIONS_MODEL;
+  const model = body.pollinations_model || POLLINATIONS_MODEL;
   const headers = { 'Content-Type': 'application/json' };
   if (POLLINATIONS_API_KEY) headers.Authorization = `Bearer ${POLLINATIONS_API_KEY}`;
 
