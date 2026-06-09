@@ -195,6 +195,42 @@ function enforceSingleQuestion(content) {
   return text.slice(0, firstQuestion + 1).trim();
 }
 
+function appearsToAddUnprovidedPropertyDetails(content, body) {
+  const text = normalizeText(content);
+  const propertyText = normalizeText(JSON.stringify(body?.properties || []));
+  const riskyTerms = [
+    'banheiro',
+    'banheiros',
+    'sala',
+    'cozinha',
+    'area util',
+    'area de servico',
+    'metro',
+    'metros',
+    'm2',
+    'm²',
+    'transporte',
+    'publico',
+    'bairro tranquilo',
+    'comodidades',
+    'supermercado',
+    'supermercados',
+    'farmacia',
+    'farmacias',
+    'restaurante',
+    'restaurantes',
+    'proximo',
+    'proximos',
+    'condominio',
+    'lazer',
+    'varanda',
+    'piscina',
+    'elevador',
+  ];
+
+  return riskyTerms.some((term) => text.includes(term) && !propertyText.includes(normalizeText(term)));
+}
+
 function propertyLine(property) {
   const bedrooms = Number(property?.dormitorios || 0) + Number(property?.suites || 0);
   const rent = Number(property?.valor_aluguel || 0);
@@ -212,6 +248,26 @@ function propertyLine(property) {
     `${bedrooms || '?'} quartos`,
     price,
   ].join(' | ');
+}
+
+function groundedPropertyReply(body) {
+  const properties = Array.isArray(body.properties) ? body.properties.slice(0, 3) : [];
+  if (!properties.length) return null;
+
+  const lines = properties.map((property) => `- ${propertyLine(property)}`);
+  const plural = properties.length > 1;
+
+  return {
+    content: [
+      plural
+        ? 'Tenho estas opcoes reais dentro do contexto do atendimento:'
+        : 'Tenho este imovel real dentro do contexto do atendimento:',
+      lines.join('\n'),
+      'Posso chamar um corretor para confirmar os detalhes que nao aparecem aqui e seguir com voce?',
+    ].join('\n\n'),
+    model: 'local-grounded-properties',
+    provider: 'local-trained',
+  };
 }
 
 function buildPrompt(body) {
@@ -252,6 +308,8 @@ REGRAS OPERACIONAIS SOCIMOB:
 - Faca no maximo uma pergunta por mensagem.
 - Nao use lista de perguntas. Se faltarem varios dados, escolha somente o dado mais importante agora.
 - Nao invente imoveis: use somente os imoveis reais abaixo.
+- Nao invente caracteristicas de imoveis. Nao cite metragem, banheiro, sala, cozinha, transporte, condominio, varanda, lazer ou qualquer detalhe que nao esteja explicitamente nos imoveis reais.
+- Se o cliente pedir detalhes que nao constam nos imoveis reais, diga com educacao que vai confirmar esses detalhes com o corretor.
 - Exemplos de imoveis no treinamento sao apenas referencia de estilo; nunca trate como estoque real.
 - Se o cliente der codigo, data, bairro, quartos, renda ou prazo, reconheca antes de avancar.
 - Se faltar informacao, peca apenas o primeiro item faltante.
@@ -395,6 +453,15 @@ async function huggingFaceChat(body) {
     };
   }
 
+  if (hasRealProperties(body) && appearsToAddUnprovidedPropertyDetails(content, body)) {
+    return {
+      ...localTrainedReply(body),
+      provider: 'local-trained',
+      fallback: true,
+      warnings: ['huggingface response discarded because it added unprovided property details'],
+    };
+  }
+
   return { content: enforceSingleQuestion(content), model, provider: 'huggingface' };
 }
 
@@ -456,6 +523,9 @@ function localTrainedReply(body) {
       provider: 'local-trained',
     };
   }
+
+  const grounded = groundedPropertyReply(body);
+  if (grounded) return grounded;
 
   if (best?.assistant) {
     return {
