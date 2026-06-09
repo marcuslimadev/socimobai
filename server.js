@@ -1,14 +1,24 @@
 import express from 'express';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3100);
 const API_KEY = String(process.env.SOCIMOB_AI_API_KEY || '').trim();
 const OLLAMA_BASE_URL = String(process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/$/, '');
 const DEFAULT_MODEL = String(process.env.OLLAMA_MODEL || 'llama3.1:8b');
 const MAX_HISTORY_CHARS = Number(process.env.MAX_HISTORY_CHARS || 6000);
 const MAX_PROPERTIES = Number(process.env.MAX_PROPERTIES || 8);
+const TRAINING_FILE = String(
+  process.env.SOCIMOB_TRAINING_FILE || path.join(__dirname, 'data', 'treinamento_imobiliaria.jsonl'),
+);
+const MAX_TRAINING_EXAMPLES = Number(process.env.MAX_TRAINING_EXAMPLES || 5);
+
+const training = loadTraining(TRAINING_FILE);
 
 function requireAuth(req, res, next) {
   if (!API_KEY) return next();
@@ -25,6 +35,102 @@ function clampText(value, maxChars) {
   const text = String(value || '').trim();
   if (text.length <= maxChars) return text;
   return text.slice(-maxChars);
+}
+
+function normalizeText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function loadTraining(filePath) {
+  const result = {
+    file: filePath,
+    loaded: false,
+    systemRules: [],
+    examples: [],
+    error: null,
+  };
+
+  try {
+    if (!fs.existsSync(filePath)) {
+      result.error = `Arquivo de treinamento nao encontrado: ${filePath}`;
+      return result;
+    }
+
+    const lines = fs.readFileSync(filePath, 'utf8')
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    lines.forEach((line, index) => {
+      try {
+        const parsed = JSON.parse(line);
+        const messages = Array.isArray(parsed?.messages) ? parsed.messages : [];
+        const system = messages.find((message) => message?.role === 'system' && message?.content)?.content;
+        const user = messages.find((message) => message?.role === 'user' && message?.content)?.content;
+        const assistant = [...messages].reverse()
+          .find((message) => message?.role === 'assistant' && message?.content)?.content;
+
+        if (system && !result.systemRules.includes(system)) result.systemRules.push(system);
+        if (assistant) {
+          result.examples.push({
+            index: index + 1,
+            user: user || '',
+            assistant,
+            search: normalizeText(`${user || ''} ${assistant}`),
+          });
+        }
+      } catch (error) {
+        result.error = `Linha ${index + 1} invalida no treinamento: ${error.message}`;
+      }
+    });
+
+    result.loaded = result.examples.length > 0 || result.systemRules.length > 0;
+    return result;
+  } catch (error) {
+    result.error = error.message;
+    return result;
+  }
+}
+
+function selectTrainingExamples(body) {
+  if (!training.examples.length || MAX_TRAINING_EXAMPLES <= 0) return [];
+
+  const query = normalizeText([
+    body.message,
+    body.history,
+    body.lead?.objetivo_compra,
+    body.lead?.preferencia_bairro,
+    body.lead?.localizacao,
+  ].filter(Boolean).join(' '));
+
+  const terms = new Set(query.split(' ').filter((term) => term.length >= 4));
+
+  return training.examples
+    .map((example) => {
+      const score = example.search.split(' ')
+        .filter((term) => terms.has(term))
+        .length;
+      return { ...example, score };
+    })
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .slice(0, MAX_TRAINING_EXAMPLES);
+}
+
+function trainingExamplesBlock(body) {
+  const examples = selectTrainingExamples(body);
+  if (!examples.length) return 'Nenhum exemplo de treinamento carregado.';
+
+  return examples.map((example) => [
+    `Exemplo ${example.index}:`,
+    example.user ? `Cliente: ${example.user}` : null,
+    `Resposta modelo: ${clampText(example.assistant, 900)}`,
+  ].filter(Boolean).join('\n')).join('\n\n');
 }
 
 function propertyLine(property) {
@@ -72,13 +178,18 @@ function buildPrompt(body) {
   return {
     system: `${body.system_prompt || ''}
 
+BASE DE TREINAMENTO SOCIMOB:
+${training.systemRules.join('\n') || 'Use atendimento imobiliario consultivo, empatico e orientado a proximo passo.'}
+
 REGRAS OPERACIONAIS SOCIMOB:
 - Voce e ${assistantName}, da ${companyName}.
 - Responda sempre em portugues do Brasil.
 - Seja educada, consultiva e acolhedora.
 - Nao seja seca, nao pressione e nao repita pergunta respondida.
+- Use o estilo dos exemplos treinados: conduza o atendimento, explique o proximo passo e, quando fizer sentido, sugira exemplos curtos de resposta.
 - Faca no maximo uma pergunta por mensagem.
 - Nao invente imoveis: use somente os imoveis reais abaixo.
+- Exemplos de imoveis no treinamento sao apenas referencia de estilo; nunca trate como estoque real.
 - Se o cliente der codigo, data, bairro, quartos, renda ou prazo, reconheca antes de avancar.
 - Se faltar informacao, peca apenas o primeiro item faltante.
 - Nao diga que e IA ou robo.
@@ -94,6 +205,9 @@ ${missing.length ? missing.join(', ') : 'nenhum dado principal pendente'}
 
 IMOVEIS REAIS DISPONIVEIS:
 ${propertyContext}
+
+EXEMPLOS RELEVANTES DO TREINAMENTO:
+${trainingExamplesBlock(body)}
 
 MENSAGEM ATUAL DO CLIENTE:
 ${body.message || ''}
@@ -149,12 +263,26 @@ app.get('/health', requireAuth, async (_req, res) => {
       model: DEFAULT_MODEL,
       model_available: models.includes(DEFAULT_MODEL),
       models,
+      training: {
+        loaded: training.loaded,
+        file: training.file,
+        examples: training.examples.length,
+        rules: training.systemRules.length,
+        error: training.error,
+      },
     });
   } catch (error) {
     return res.status(503).json({
       success: false,
       provider: 'ollama',
       model: DEFAULT_MODEL,
+      training: {
+        loaded: training.loaded,
+        file: training.file,
+        examples: training.examples.length,
+        rules: training.systemRules.length,
+        error: training.error,
+      },
       error: error.message,
     });
   }
@@ -179,4 +307,9 @@ app.post('/chat', requireAuth, async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Socimob AI Gateway listening on port ${PORT}`);
+  if (training.loaded) {
+    console.log(`Socimob training loaded: ${training.examples.length} examples from ${training.file}`);
+  } else {
+    console.warn(`Socimob training not loaded: ${training.error || 'no examples'}`);
+  }
 });

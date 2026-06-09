@@ -48,7 +48,23 @@ PORT=3100
 SOCIMOB_AI_API_KEY=uma-chave-forte
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_MODEL=llama3.1:8b
+SOCIMOB_TRAINING_FILE=./data/treinamento_imobiliaria.jsonl
+MAX_TRAINING_EXAMPLES=5
 ```
+
+## Regras treinadas
+
+O gateway carrega automaticamente `data/treinamento_imobiliaria.jsonl`, copiado de `C:\Treinamento IA`.
+
+Esse arquivo ainda nao e um modelo fine-tuned; ele funciona como base de regras e exemplos de atendimento. A cada chamada, o gateway seleciona exemplos relevantes e injeta no prompt do modelo hospedado, mantendo:
+
+- atendimento imobiliario empatico;
+- conducao ativa do funil;
+- sugestoes curtas de resposta para o cliente;
+- proximo passo claro;
+- cuidado para nao repetir perguntas ja respondidas.
+
+Os imoveis citados no treinamento servem apenas como exemplo de estilo. O gateway continua instruido a usar somente os imoveis reais enviados pelo Socimob na chamada.
 
 ## Variaveis no Socimob
 
@@ -101,7 +117,7 @@ Resposta:
 
 ## Sobre treinamento
 
-`C:\Treinamento IA\treinamento_imobiliaria.jsonl` e um dataset inicial, nao um modelo pronto.
+`data/treinamento_imobiliaria.jsonl` e um dataset inicial, nao um modelo pronto.
 
 O caminho seguro e:
 
