@@ -1,0 +1,9 @@
+torch>=2.9
+transformers>=4.46
+datasets>=3.0
+accelerate>=1.0
+peft>=0.13
+sentencepiece>=0.2
+safetensors>=0.4
+fastapi>=0.115
+uvicorn>=0.30

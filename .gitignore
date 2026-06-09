@@ -1,4 +1,7 @@
 node_modules/
+models/
+runs/
+.cache/
 .env
 .env.*
 !.env.example
