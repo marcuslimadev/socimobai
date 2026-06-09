@@ -1,7 +1,10 @@
 import express from 'express';
+import dotenv from 'dotenv';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+dotenv.config({ override: true });
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
