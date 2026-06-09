@@ -9,8 +9,12 @@ app.use(express.json({ limit: '1mb' }));
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3100);
 const API_KEY = String(process.env.SOCIMOB_AI_API_KEY || '').trim();
+const AI_PROVIDER = String(process.env.AI_PROVIDER || 'auto').trim().toLowerCase();
 const OLLAMA_BASE_URL = String(process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/$/, '');
 const DEFAULT_MODEL = String(process.env.OLLAMA_MODEL || 'llama3.1:8b');
+const POLLINATIONS_BASE_URL = String(process.env.POLLINATIONS_BASE_URL || 'https://text.pollinations.ai/openai').replace(/\/$/, '');
+const POLLINATIONS_MODEL = String(process.env.POLLINATIONS_MODEL || 'openai');
+const POLLINATIONS_API_KEY = String(process.env.POLLINATIONS_API_KEY || '').trim();
 const MAX_HISTORY_CHARS = Number(process.env.MAX_HISTORY_CHARS || 6000);
 const MAX_PROPERTIES = Number(process.env.MAX_PROPERTIES || 8);
 const TRAINING_FILE = String(
@@ -251,7 +255,179 @@ async function ollamaChat(body) {
   return { content: content.trim(), model };
 }
 
+async function pollinationsChat(body) {
+  const prompt = buildPrompt(body);
+  const model = body.model || POLLINATIONS_MODEL;
+  const headers = { 'Content-Type': 'application/json' };
+  if (POLLINATIONS_API_KEY) headers.Authorization = `Bearer ${POLLINATIONS_API_KEY}`;
+
+  const response = await fetch(POLLINATIONS_BASE_URL, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      model,
+      stream: false,
+      temperature: 0.45,
+      max_tokens: 260,
+      messages: [
+        { role: 'system', content: prompt.system },
+        { role: 'user', content: prompt.user },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Pollinations ${response.status}: ${text.slice(0, 500)}`);
+  }
+
+  const data = await response.json();
+  const content = data?.choices?.[0]?.message?.content || data?.message?.content || data?.content;
+  if (!content || typeof content !== 'string') {
+    throw new Error('Resposta invalida da Pollinations');
+  }
+
+  return { content: content.trim(), model, provider: 'pollinations' };
+}
+
+function localTrainedReply(body) {
+  const lead = body.lead && typeof body.lead === 'object' ? body.lead : {};
+  const message = String(body.message || '').trim();
+  const name = lead.nome || lead.name || lead.cliente || '';
+  const firstName = String(name).split(/\s+/).filter(Boolean)[0] || '';
+  const prefix = firstName ? `${firstName}, ` : '';
+
+  const examples = selectTrainingExamples(body);
+  const best = examples[0];
+  const lower = normalizeText(message);
+
+  if (/\b(oi|ola|bom dia|boa tarde|boa noite)\b/.test(lower)) {
+    return {
+      content: `${prefix}que bom falar com voce. Me conte, por favor: voce procura comprar, alugar ou vender um imovel? Exemplo: "quero alugar apartamento ate R$ 1.500".`,
+      model: 'local-trained-rules',
+      provider: 'local-trained',
+    };
+  }
+
+  if (!lead.objetivo_compra) {
+    return {
+      content: `${prefix}entendi. Para eu te conduzir certinho, voce procura compra, aluguel ou venda? Pode responder, por exemplo: "quero alugar" ou "quero comprar".`,
+      model: 'local-trained-rules',
+      provider: 'local-trained',
+    };
+  }
+
+  if (!lead.localizacao && !lead.preferencia_bairro) {
+    return {
+      content: `${prefix}perfeito. Qual bairro ou regiao voce prefere? Se estiver aberto a opcoes, pode me dizer algo como "pode ser perto do centro" ou "qualquer bairro ate esse valor".`,
+      model: 'local-trained-rules',
+      provider: 'local-trained',
+    };
+  }
+
+  if (!lead.budget_max && !lead.budget_min) {
+    return {
+      content: `${prefix}otimo, ja anotei a regiao. Qual faixa de valor voce quer considerar? Exemplo: "ate R$ 1.500" para aluguel ou "ate R$ 300 mil" para compra.`,
+      model: 'local-trained-rules',
+      provider: 'local-trained',
+    };
+  }
+
+  if (!lead.quartos) {
+    return {
+      content: `${prefix}certo. Quantos quartos seriam ideais para voce? Pode responder "1 quarto", "2 quartos" ou "1 ou 2", por exemplo.`,
+      model: 'local-trained-rules',
+      provider: 'local-trained',
+    };
+  }
+
+  if (!lead.prazo_compra) {
+    return {
+      content: `${prefix}ja tenho o principal para filtrar melhor. Para quando voce pretende se mudar ou concluir essa etapa? Exemplo: "este mes", "em 15 dias" ou "sem pressa".`,
+      model: 'local-trained-rules',
+      provider: 'local-trained',
+    };
+  }
+
+  if (best?.assistant) {
+    return {
+      content: clampText(best.assistant, 700),
+      model: 'local-trained-rules',
+      provider: 'local-trained',
+    };
+  }
+
+  return {
+    content: `${prefix}perfeito, obrigado pelas informacoes. Vou seguir com uma busca mais alinhada ao que voce precisa e, se alguma opcao fizer sentido, posso te mostrar os detalhes ou chamar um corretor para continuar com voce.`,
+    model: 'local-trained-rules',
+    provider: 'local-trained',
+  };
+}
+
+async function generateChat(body) {
+  const errors = [];
+
+  if (AI_PROVIDER === 'ollama') {
+    const result = await ollamaChat(body);
+    return { ...result, provider: 'ollama' };
+  }
+
+  if (AI_PROVIDER === 'pollinations') {
+    return pollinationsChat(body);
+  }
+
+  if (AI_PROVIDER === 'local') {
+    return localTrainedReply(body);
+  }
+
+  try {
+    const result = await ollamaChat(body);
+    return { ...result, provider: 'ollama' };
+  } catch (error) {
+    errors.push(`ollama: ${error.message}`);
+  }
+
+  try {
+    return await pollinationsChat(body);
+  } catch (error) {
+    errors.push(`pollinations: ${error.message}`);
+  }
+
+  const fallback = localTrainedReply(body);
+  return {
+    ...fallback,
+    fallback: true,
+    warnings: errors,
+  };
+}
+
 app.get('/health', requireAuth, async (_req, res) => {
+  const trainingHealth = {
+    loaded: training.loaded,
+    file: training.file,
+    examples: training.examples.length,
+    rules: training.systemRules.length,
+    error: training.error,
+  };
+
+  if (AI_PROVIDER === 'pollinations') {
+    return res.json({
+      success: true,
+      provider: 'pollinations',
+      model: POLLINATIONS_MODEL,
+      training: trainingHealth,
+    });
+  }
+
+  if (AI_PROVIDER === 'local') {
+    return res.json({
+      success: true,
+      provider: 'local-trained',
+      model: 'local-trained-rules',
+      training: trainingHealth,
+    });
+  }
+
   try {
     const response = await fetch(`${OLLAMA_BASE_URL}/api/tags`);
     const data = response.ok ? await response.json() : null;
@@ -259,30 +435,33 @@ app.get('/health', requireAuth, async (_req, res) => {
 
     return res.json({
       success: response.ok,
-      provider: 'ollama',
+      provider: AI_PROVIDER === 'auto' ? 'auto' : 'ollama',
       model: DEFAULT_MODEL,
       model_available: models.includes(DEFAULT_MODEL),
       models,
-      training: {
-        loaded: training.loaded,
-        file: training.file,
-        examples: training.examples.length,
-        rules: training.systemRules.length,
-        error: training.error,
-      },
+      pollinations_fallback: AI_PROVIDER === 'auto',
+      local_fallback: AI_PROVIDER === 'auto',
+      training: trainingHealth,
     });
   } catch (error) {
+    if (AI_PROVIDER === 'auto') {
+      return res.json({
+        success: true,
+        provider: 'auto',
+        model: DEFAULT_MODEL,
+        ollama_available: false,
+        pollinations_fallback: true,
+        local_fallback: true,
+        training: trainingHealth,
+        warning: error.message,
+      });
+    }
+
     return res.status(503).json({
       success: false,
       provider: 'ollama',
       model: DEFAULT_MODEL,
-      training: {
-        loaded: training.loaded,
-        file: training.file,
-        examples: training.examples.length,
-        rules: training.systemRules.length,
-        error: training.error,
-      },
+      training: trainingHealth,
       error: error.message,
     });
   }
@@ -290,12 +469,14 @@ app.get('/health', requireAuth, async (_req, res) => {
 
 app.post('/chat', requireAuth, async (req, res) => {
   try {
-    const result = await ollamaChat(req.body || {});
+    const result = await generateChat(req.body || {});
     return res.json({
       success: true,
       content: result.content,
       model: result.model,
-      provider: 'socimob-ai-gateway',
+      provider: result.provider || 'socimob-ai-gateway',
+      fallback: result.fallback || false,
+      warnings: result.warnings || undefined,
     });
   } catch (error) {
     return res.status(502).json({

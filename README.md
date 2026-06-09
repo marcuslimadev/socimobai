@@ -46,11 +46,24 @@ Em producao, rode com `pm2`, `systemd` ou painel Node do provedor.
 ```bash
 PORT=3100
 SOCIMOB_AI_API_KEY=uma-chave-forte
+AI_PROVIDER=auto
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_MODEL=llama3.1:8b
+POLLINATIONS_BASE_URL=https://text.pollinations.ai/openai
+POLLINATIONS_MODEL=openai
+POLLINATIONS_API_KEY=
 SOCIMOB_TRAINING_FILE=./data/treinamento_imobiliaria.jsonl
 MAX_TRAINING_EXAMPLES=5
 ```
+
+`AI_PROVIDER=auto` tenta usar Ollama primeiro. Se a hospedagem Node nao tiver Ollama rodando, o gateway usa a API gratuita da Pollinations. Se ela tambem falhar, responde com o fallback local baseado nas regras treinadas.
+
+Opcoes:
+
+- `auto`: Ollama -> Pollinations -> regras locais treinadas.
+- `ollama`: exige Ollama acessivel em `OLLAMA_BASE_URL`.
+- `pollinations`: usa apenas a API remota gratuita.
+- `local`: usa apenas o fallback local com as regras/exemplos do JSONL.
 
 ## Regras treinadas
 
