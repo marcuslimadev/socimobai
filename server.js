@@ -492,7 +492,10 @@ async function localModelChat(body) {
   }
 
   const prompt = buildPrompt(body);
-  const headers = { 'Content-Type': 'application/json' };
+  const headers = {
+    'Content-Type': 'application/json',
+    'ngrok-skip-browser-warning': 'true',
+  };
   if (LOCAL_MODEL_API_KEY) headers.Authorization = `Bearer ${LOCAL_MODEL_API_KEY}`;
 
   const response = await fetch(`${LOCAL_MODEL_BASE_URL}/chat`, {
