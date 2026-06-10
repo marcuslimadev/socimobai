@@ -71,9 +71,7 @@ def create_app(model_dir: Path, api_key: str = ""):
             output = model.generate(
                 **inputs,
                 max_new_tokens=max(16, min(payload.max_new_tokens, 300)),
-                do_sample=True,
-                temperature=0.45,
-                top_p=0.9,
+                do_sample=False,
                 repetition_penalty=1.15,
                 pad_token_id=tokenizer.eos_token_id,
             )

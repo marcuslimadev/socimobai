@@ -2,6 +2,9 @@ node_modules/
 models/
 runs/
 .cache/
+.tmp-*.log
+__pycache__/
+*.pyc
 .env
 .env.*
 !.env.example

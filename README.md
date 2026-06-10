@@ -134,15 +134,71 @@ Resposta:
 }
 ```
 
+## Fine-tuning local
+
+O repo tambem tem um fluxo de fine-tuning local com Python. Ele foi montado para
+destilar o comportamento de um modelo maior do Hugging Face em um modelo menor,
+que pode rodar localmente ou em um servidor proprio.
+
+Instale as dependencias:
+
+```powershell
+pip install -r requirements-train.txt
+```
+
+Gerar dataset com um modelo professor do Hugging Face:
+
+```powershell
+$env:HF_TOKEN="seu_token"
+python scripts\generate_teacher_dataset.py --target-count 120
+```
+
+Gerar exemplos locais de aterramento, sem custo externo:
+
+```powershell
+python scripts\build_grounding_dataset.py
+```
+
+Treinar o modelo local:
+
+```powershell
+python scripts\train_finetune.py `
+  --dataset data\treinamento_socimob_regras.jsonl data\teacher_socimob_qwen7b_grounded.jsonl data\treinamento_socimob_grounding.jsonl data\treinamento_socimob_grounding_amplified.jsonl `
+  --base-model Qwen/Qwen2.5-0.5B-Instruct `
+  --epochs 2 `
+  --learning-rate 0.00003 `
+  --output-dir models\socimobai-distilled-qwen
+```
+
+Testar uma resposta:
+
+```powershell
+python scripts\test_finetuned_model.py --model-dir models\socimobai-distilled-qwen --message "Quero alugar apartamento ate 1500 em Santa Luzia"
+```
+
+Servir o modelo por API local:
+
+```powershell
+python scripts\serve_finetuned_model.py --model-dir models\socimobai-distilled-qwen --port 8001
+```
+
+Observacao importante: o modelo fine-tuned pequeno melhora o estilo e algumas
+regras do atendimento, mas nao deve ser usado cru em producao. O gateway Node
+continua sendo a camada segura, porque valida respostas, impede invencao de
+imoveis e usa fallback deterministico quando o modelo tenta citar dados que nao
+vieram do Socimob.
+
 ## Sobre treinamento
 
-`data/treinamento_imobiliaria.jsonl` e um dataset inicial, nao um modelo pronto.
+`data/treinamento_imobiliaria.jsonl` foi mantido apenas como historico inicial.
+Ele contem exemplos antigos de estilo e pode inventar imoveis ficticios, entao
+nao deve ser usado em novos fine-tunings de producao.
 
 O caminho seguro e:
 
-1. Rodar um modelo pre-treinado open-source.
+1. Rodar o gateway com guardrails.
 2. Coletar conversas reais boas.
 3. Anonimizar nomes, telefones, CPFs e enderecos sensiveis.
-4. Gerar dataset grande de exemplos.
+4. Gerar dataset grande de exemplos aterrados em imoveis reais.
 5. Fazer fine-tuning/LoRA em ambiente separado.
-6. Trocar `OLLAMA_MODEL` para o modelo treinado.
+6. Validar contra casos reais antes de trocar o modelo em producao.
