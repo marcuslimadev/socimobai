@@ -2,7 +2,8 @@ node_modules/
 models/
 runs/
 .cache/
-.tmp-*.log
+.tmp-*
+tools/ngrok/
 __pycache__/
 *.pyc
 .env

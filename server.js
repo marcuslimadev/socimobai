@@ -178,10 +178,69 @@ function hasRealProperties(body) {
   return Array.isArray(body?.properties) && body.properties.length > 0;
 }
 
-function needsGuidedQualification(body) {
+function combinedConversationText(body) {
   const lead = body?.lead && typeof body.lead === 'object' ? body.lead : {};
 
-  return !lead.objetivo_compra
+  return normalizeText([
+    body?.message,
+    body?.history,
+    lead.objetivo_compra,
+    lead.objective,
+    lead.preferencia_bairro,
+    lead.localizacao,
+    lead.budget_max,
+    lead.budget_min,
+    lead.quartos,
+    lead.prazo_compra,
+    lead.renda_mensal,
+  ].filter(Boolean).join(' '));
+}
+
+function inferredLead(body) {
+  const lead = body?.lead && typeof body.lead === 'object' ? { ...body.lead } : {};
+  const text = combinedConversationText(body);
+
+  if (!lead.objetivo_compra && !lead.objective) {
+    if (/\b(aluguel|alugar|locacao|locar|mudar|mudar se)\b/.test(text)) {
+      lead.objetivo_compra = 'aluguel';
+    } else if (/\b(compra|comprar|financiar|financiamento)\b/.test(text)) {
+      lead.objetivo_compra = 'compra';
+    } else if (/\b(venda|vender)\b/.test(text)) {
+      lead.objetivo_compra = 'venda';
+    }
+  }
+
+  if (!lead.localizacao && !lead.preferencia_bairro) {
+    const regionMatch = text.match(/\b(?:em|bairro|regiao|regiao de|perto de)\s+([a-z0-9 ]{3,40})/);
+    if (regionMatch?.[1]) lead.preferencia_bairro = regionMatch[1].trim();
+  }
+
+  if (!lead.budget_max && !lead.budget_min && /\b(?:r\s*)?\$?\s?\d{3,}(?:[.,]\d{2})?\b/.test(text)) {
+    const valueMatch = text.match(/\b(?:r\s*)?\$?\s?(\d{3,})(?:[.,]\d{2})?\b/);
+    if (valueMatch?.[1]) lead.budget_max = Number(valueMatch[1]);
+  }
+
+  if (!lead.quartos && /\b\d+\s*(?:ou\s*\d+\s*)?(?:quarto|quartos|dormitorio|dormitorios)\b/.test(text)) {
+    const roomMatch = text.match(/\b(\d+\s*(?:ou\s*\d+)?)\s*(?:quarto|quartos|dormitorio|dormitorios)\b/);
+    if (roomMatch?.[1]) lead.quartos = roomMatch[1];
+  }
+
+  if (!lead.prazo_compra && /\b(hoje|amanha|este mes|esse mes|15 dias|dia \d{1,2}|\d{1,2} de [a-z]+|sem pressa)\b/.test(text)) {
+    const prazoMatch = text.match(/\b(hoje|amanha|este mes|esse mes|15 dias|dia \d{1,2}|\d{1,2} de [a-z]+|sem pressa)\b/);
+    if (prazoMatch?.[1]) lead.prazo_compra = prazoMatch[1];
+  }
+
+  if (!lead.renda_mensal && /\b(clt|autonomo|autonomo|pj|mei|renda)\b/.test(text)) {
+    lead.renda_mensal = lead.renda_mensal || 'informada no historico';
+  }
+
+  return lead;
+}
+
+function needsGuidedQualification(body) {
+  const lead = inferredLead(body);
+
+  return !(lead.objetivo_compra || lead.objective)
     || (!lead.localizacao && !lead.preferencia_bairro)
     || (!lead.budget_max && !lead.budget_min)
     || !lead.quartos
@@ -250,7 +309,7 @@ function appearsToInventPropertyWithoutContext(content) {
 
 function appearsToConfuseLeadObjective(content, body) {
   const text = normalizeText(content);
-  const lead = body?.lead && typeof body.lead === 'object' ? body.lead : {};
+  const lead = inferredLead(body);
   const objective = normalizeText(lead.objetivo_compra || lead.objective || '');
 
   if (text.includes('exaple') || text.includes('example')) return true;
@@ -310,9 +369,9 @@ function safeModelReply(content, body, model, provider) {
 }
 
 function propertyLine(property) {
-  const bedrooms = Number(property?.dormitorios || 0) + Number(property?.suites || 0);
-  const rent = Number(property?.valor_aluguel || 0);
-  const sale = Number(property?.valor_venda || 0);
+  const bedrooms = Number(property?.dormitorios || property?.bedrooms || 0) + Number(property?.suites || 0);
+  const rent = Number(property?.valor_aluguel || property?.rent_price || property?.rent || 0);
+  const sale = Number(property?.valor_venda || property?.sale_price || property?.price || 0);
   const price = rent > 0
     ? `aluguel R$ ${rent.toLocaleString('pt-BR')}`
     : sale > 0
@@ -320,9 +379,9 @@ function propertyLine(property) {
       : 'valor sob consulta';
 
   return [
-    `Codigo ${property?.codigo_imovel || property?.codigo || 'N/A'}`,
-    property?.tipo_imovel || 'Imovel',
-    [property?.bairro, property?.cidade].filter(Boolean).join(', ') || 'local nao informado',
+    `Codigo ${property?.codigo_imovel || property?.codigo || property?.code || 'N/A'}`,
+    property?.tipo_imovel || property?.type || 'Imovel',
+    [property?.bairro || property?.neighborhood, property?.cidade || property?.city].filter(Boolean).join(', ') || 'local nao informado',
     `${bedrooms || '?'} quartos`,
     price,
   ].join(' | ');
@@ -352,10 +411,10 @@ function buildPrompt(body) {
   const assistantName = body.assistant_name || 'Teresa';
   const companyName = body.company_name || 'Exclusiva Lar Imoveis';
   const properties = Array.isArray(body.properties) ? body.properties.slice(0, MAX_PROPERTIES) : [];
-  const lead = body.lead && typeof body.lead === 'object' ? body.lead : {};
+  const lead = inferredLead(body);
   const missing = [];
 
-  if (!lead.objetivo_compra) missing.push('compra ou aluguel');
+  if (!lead.objetivo_compra && !lead.objective) missing.push('compra ou aluguel');
   if (!lead.localizacao && !lead.preferencia_bairro) missing.push('bairro ou regiao');
   if (!lead.budget_max && !lead.budget_min) missing.push('faixa de valor');
   if (!lead.quartos) missing.push('quantidade de quartos');
@@ -568,7 +627,7 @@ async function localModelChat(body) {
 }
 
 function localTrainedReply(body) {
-  const lead = body.lead && typeof body.lead === 'object' ? body.lead : {};
+  const lead = inferredLead(body);
   const message = String(body.message || '').trim();
   const name = lead.nome || lead.name || lead.cliente || '';
   const firstName = String(name).split(/\s+/).filter(Boolean)[0] || '';
@@ -577,6 +636,11 @@ function localTrainedReply(body) {
   const examples = selectTrainingExamples(body);
   const best = examples[0];
   const lower = normalizeText(message);
+  const grounded = groundedPropertyReply(body);
+
+  if (grounded && /\b(gostei|interesse|quero esse|quero este|esse|este|codigo|cod|ref|referencia|visita|ver)\b/.test(lower)) {
+    return grounded;
+  }
 
   if (/\b(oi|ola|bom dia|boa tarde|boa noite)\b/.test(lower)) {
     return {
@@ -586,7 +650,7 @@ function localTrainedReply(body) {
     };
   }
 
-  if (!lead.objetivo_compra) {
+  if (!lead.objetivo_compra && !lead.objective) {
     return {
       content: `${prefix}entendi. Para eu te conduzir certinho, voce procura compra, aluguel ou venda? Pode responder, por exemplo: "quero alugar" ou "quero comprar".`,
       model: 'local-trained-rules',
@@ -626,7 +690,6 @@ function localTrainedReply(body) {
     };
   }
 
-  const grounded = groundedPropertyReply(body);
   if (grounded) return grounded;
 
   if (!hasRealProperties(body)) {

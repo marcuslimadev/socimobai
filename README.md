@@ -189,6 +189,16 @@ Servir o modelo por API local:
 python scripts\serve_finetuned_model.py --model-dir models\socimobai-distilled-qwen --port 8001
 ```
 
+Subir a v5 local com baixa carga e expor via ngrok:
+
+```powershell
+.\scripts\start_v5_ngrok.ps1
+```
+
+O script limita threads do Python, reaproveita a chave local em
+`.tmp-v5-api-key.txt`, inicia a API em `127.0.0.1:8111`, abre o ngrok e mostra a
+URL que deve entrar em `LOCAL_MODEL_BASE_URL` no gateway online.
+
 Observacao importante: o modelo fine-tuned pequeno melhora o estilo e algumas
 regras do atendimento, mas nao deve ser usado cru em producao. O gateway Node
 continua sendo a camada segura, porque valida respostas, impede invencao de
