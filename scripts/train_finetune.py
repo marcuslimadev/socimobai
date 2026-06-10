@@ -1,5 +1,6 @@
 import argparse
 import json
+import time
 from pathlib import Path
 
 import torch
@@ -10,6 +11,7 @@ from transformers import (
     AutoTokenizer,
     DataCollatorForLanguageModeling,
     Trainer,
+    TrainerCallback,
     TrainingArguments,
 )
 
@@ -127,6 +129,16 @@ def find_lora_targets(model) -> list[str]:
     return sorted(linear_names)[:8]
 
 
+class CooldownCallback(TrainerCallback):
+    def __init__(self, seconds: float) -> None:
+        self.seconds = max(0.0, seconds)
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if self.seconds > 0:
+            time.sleep(self.seconds)
+        return control
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fine-tuning real do SocimobAI com LoRA e merge final.")
     parser.add_argument("--dataset", nargs="+", default=["data/treinamento_imobiliaria.jsonl"])
@@ -136,7 +148,16 @@ def main() -> None:
     parser.add_argument("--max-length", type=int, default=512)
     parser.add_argument("--learning-rate", type=float, default=2e-4)
     parser.add_argument("--max-steps", type=int, default=0)
+    parser.add_argument("--torch-threads", type=int, default=0)
+    parser.add_argument("--inter-step-sleep", type=float, default=0)
+    parser.add_argument("--lora-r", type=int, default=16)
+    parser.add_argument("--lora-alpha", type=int, default=32)
+    parser.add_argument("--logging-steps", type=int, default=1)
     args = parser.parse_args()
+
+    if args.torch_threads > 0:
+        torch.set_num_threads(args.torch_threads)
+        torch.set_num_interop_threads(max(1, min(args.torch_threads, 2)))
 
     dataset_paths = [Path(item) for item in args.dataset]
     output_dir = Path(args.output_dir)
@@ -160,8 +181,8 @@ def main() -> None:
 
     targets = find_lora_targets(model)
     peft_config = LoraConfig(
-        r=16,
-        lora_alpha=32,
+        r=args.lora_r,
+        lora_alpha=args.lora_alpha,
         lora_dropout=0.05,
         bias="none",
         task_type=TaskType.CAUSAL_LM,
@@ -179,7 +200,7 @@ def main() -> None:
         learning_rate=args.learning_rate,
         optim="adamw_torch",
         warmup_ratio=0.03,
-        logging_steps=1,
+        logging_steps=max(1, args.logging_steps),
         save_strategy="no",
         report_to="none",
         remove_unused_columns=False,
@@ -192,6 +213,7 @@ def main() -> None:
         args=train_args,
         train_dataset=tokenized,
         data_collator=DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False),
+        callbacks=[CooldownCallback(args.inter_step_sleep)],
     )
 
     trainer.train()
@@ -210,6 +232,10 @@ def main() -> None:
         "epochs": args.epochs,
         "max_steps": args.max_steps,
         "max_length": args.max_length,
+        "torch_threads": args.torch_threads,
+        "inter_step_sleep": args.inter_step_sleep,
+        "lora_r": args.lora_r,
+        "lora_alpha": args.lora_alpha,
         "lora_targets": targets,
         "output_dir": str(output_dir),
         "adapter_dir": str(adapter_dir),
