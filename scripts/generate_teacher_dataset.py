@@ -230,7 +230,19 @@ def is_bad_teacher_reply(content: str, scenario: dict) -> bool:
         "nao tenho imoveis",
         "não tenho imóveis",
         "infelizmente",
+        "tenho este imovel",
+        "tenho esse imovel",
+        "tenho estas opcoes",
+        "tenho essas opcoes",
+        "imovel que mais se encaixa",
+        "opcao para voce",
+        "oportunidade para voce",
+        "casa 123",
+        "codigo exc",
+        "codigo 9049",
     ]):
+        return True
+    if no_properties and any(term in text for term in ["1)", "2)", "3)", "1.", "2.", "3.", "1️⃣", "2️⃣", "3️⃣"]):
         return True
     lead = scenario.get("lead", {})
     if lead.get("budget_max") and any(term in text for term in ["valor maximo", "valor máximo", "orcamento", "orçamento"]):
@@ -246,6 +258,8 @@ def is_bad_teacher_reply(content: str, scenario: dict) -> bool:
     if "terreno" in scenario["message"].lower() and any(term in text for term in ["quartos", "dormitorios", "dormitórios", "vaga de garagem"]):
         return True
     if scenario["properties"] and any(term in text for term in ["comodidades", "mercados", "farmacias", "restaurantes", "transporte publico"]):
+        return True
+    if no_properties and "r$" in text and not lead.get("budget_max") and not lead.get("budget_min"):
         return True
     return False
 

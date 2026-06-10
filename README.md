@@ -52,6 +52,9 @@ OLLAMA_MODEL=llama3.1:8b
 HF_ROUTER_BASE_URL=https://router.huggingface.co/v1
 HF_TOKEN=
 HF_MODEL=Qwen/Qwen2.5-7B-Instruct:fastest
+LOCAL_MODEL_BASE_URL=http://127.0.0.1:8111
+LOCAL_MODEL_API_KEY=
+LOCAL_MODEL_NAME=socimobai-finetuned
 POLLINATIONS_BASE_URL=https://text.pollinations.ai/openai
 POLLINATIONS_MODEL=openai
 POLLINATIONS_API_KEY=
@@ -61,12 +64,16 @@ MAX_TRAINING_EXAMPLES=5
 
 `AI_PROVIDER=huggingface` usa o Hugging Face Inference Providers Router, com um modelo aberto de chat.
 
-`AI_PROVIDER=auto` tenta usar Hugging Face primeiro. Se nao houver token ou o provider falhar, tenta Ollama, depois Pollinations, e por ultimo responde com o fallback local baseado nas regras treinadas.
+`AI_PROVIDER=auto` tenta usar o modelo fine-tuned local primeiro, quando
+`LOCAL_MODEL_BASE_URL` estiver configurado. Se ele falhar, tenta Hugging Face,
+Ollama, Pollinations e, por ultimo, responde com o fallback local baseado nas
+regras treinadas.
 
 Opcoes:
 
 - `huggingface` ou `hf`: usa o Hugging Face Router.
-- `auto`: Hugging Face -> Ollama -> Pollinations -> regras locais treinadas.
+- `local_model` ou `finetuned`: usa a API Python do modelo fine-tuned.
+- `auto`: modelo fine-tuned local -> Hugging Face -> Ollama -> Pollinations -> regras locais treinadas.
 - `ollama`: exige Ollama acessivel em `OLLAMA_BASE_URL`.
 - `pollinations`: usa apenas a API remota gratuita.
 - `local`: usa apenas o fallback local com as regras/exemplos do JSONL.
@@ -150,7 +157,7 @@ Gerar dataset com um modelo professor do Hugging Face:
 
 ```powershell
 $env:HF_TOKEN="seu_token"
-python scripts\generate_teacher_dataset.py --target-count 120
+python scripts\generate_teacher_dataset.py --output data\teacher_socimob_qwen7b_v2.jsonl --target-examples 240
 ```
 
 Gerar exemplos locais de aterramento, sem custo externo:

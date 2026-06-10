@@ -17,6 +17,9 @@ const DEFAULT_MODEL = String(process.env.OLLAMA_MODEL || 'llama3.1:8b');
 const HF_ROUTER_BASE_URL = String(process.env.HF_ROUTER_BASE_URL || 'https://router.huggingface.co/v1').replace(/\/$/, '');
 const HF_TOKEN = String(process.env.HF_TOKEN || process.env.HUGGINGFACE_TOKEN || '').trim();
 const HF_MODEL = String(process.env.HF_MODEL || 'Qwen/Qwen2.5-7B-Instruct:fastest');
+const LOCAL_MODEL_BASE_URL = String(process.env.LOCAL_MODEL_BASE_URL || '').replace(/\/$/, '');
+const LOCAL_MODEL_API_KEY = String(process.env.LOCAL_MODEL_API_KEY || '').trim();
+const LOCAL_MODEL_NAME = String(process.env.LOCAL_MODEL_NAME || 'socimobai-finetuned');
 const POLLINATIONS_BASE_URL = String(process.env.POLLINATIONS_BASE_URL || 'https://text.pollinations.ai/openai').replace(/\/$/, '');
 const POLLINATIONS_MODEL = String(process.env.POLLINATIONS_MODEL || 'openai');
 const POLLINATIONS_API_KEY = String(process.env.POLLINATIONS_API_KEY || '').trim();
@@ -231,6 +234,42 @@ function appearsToAddUnprovidedPropertyDetails(content, body) {
   return riskyTerms.some((term) => text.includes(term) && !propertyText.includes(normalizeText(term)));
 }
 
+function appearsToInventPropertyWithoutContext(content) {
+  const text = String(content || '');
+  const normalized = normalizeText(text);
+
+  return /(?:^|\n)\s*(?:1[.)]|1️⃣|2[.)]|2️⃣|3[.)]|3️⃣)|R\$\s*\d|op[cç][oõ]es?:/i.test(text)
+    || /\b(?:casa|apartamento|cobertura|terreno)\s+\d+\b/i.test(text)
+    || /\bcodigo\s+[a-z0-9-]+\b/i.test(text)
+    || normalized.includes('casa 123')
+    || normalized.includes('imovel que mais se encaixa')
+    || normalized.includes('tenho este imovel')
+    || normalized.includes('tenho estas opcoes');
+}
+
+function safeModelReply(content, body, model, provider) {
+  if (!hasRealProperties(body) && appearsToInventPropertyWithoutContext(content)) {
+    return {
+      ...localTrainedReply(body),
+      provider: 'local-trained',
+      fallback: true,
+      warnings: [`${provider} response discarded because it appeared to invent properties`],
+    };
+  }
+
+  if (hasRealProperties(body) && appearsToAddUnprovidedPropertyDetails(content, body)) {
+    const grounded = groundedPropertyReply(body) || localTrainedReply(body);
+    return {
+      ...grounded,
+      provider: 'local-trained',
+      fallback: true,
+      warnings: [`${provider} response discarded because it added unprovided property details`],
+    };
+  }
+
+  return { content: enforceSingleQuestion(content), model, provider };
+}
+
 function propertyLine(property) {
   const bedrooms = Number(property?.dormitorios || 0) + Number(property?.suites || 0);
   const rent = Number(property?.valor_aluguel || 0);
@@ -404,7 +443,7 @@ async function pollinationsChat(body) {
     throw new Error('Resposta invalida da Pollinations');
   }
 
-  return { content: enforceSingleQuestion(content), model, provider: 'pollinations' };
+  return safeModelReply(content, body, model, 'pollinations');
 }
 
 async function huggingFaceChat(body) {
@@ -444,25 +483,42 @@ async function huggingFaceChat(body) {
     throw new Error('Resposta invalida do Hugging Face');
   }
 
-  if (!hasRealProperties(body) && /(?:^|\n)\s*(?:1[.)]|1️⃣|2[.)]|2️⃣|3[.)]|3️⃣)|R\$\s*\d|op[cç][oõ]es?:/i.test(content)) {
-    return {
-      ...localTrainedReply(body),
-      provider: 'local-trained',
-      fallback: true,
-      warnings: ['huggingface response discarded because it appeared to invent properties'],
-    };
+  return safeModelReply(content, body, model, 'huggingface');
+}
+
+async function localModelChat(body) {
+  if (!LOCAL_MODEL_BASE_URL) {
+    throw new Error('LOCAL_MODEL_BASE_URL not configured');
   }
 
-  if (hasRealProperties(body) && appearsToAddUnprovidedPropertyDetails(content, body)) {
-    return {
-      ...localTrainedReply(body),
-      provider: 'local-trained',
-      fallback: true,
-      warnings: ['huggingface response discarded because it added unprovided property details'],
-    };
+  const prompt = buildPrompt(body);
+  const headers = { 'Content-Type': 'application/json' };
+  if (LOCAL_MODEL_API_KEY) headers.Authorization = `Bearer ${LOCAL_MODEL_API_KEY}`;
+
+  const response = await fetch(`${LOCAL_MODEL_BASE_URL}/chat`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      message: prompt.user,
+      history: prompt.system,
+      assistant_name: body.assistant_name || 'Teresa',
+      company_name: body.company_name || 'Exclusiva Lar Imoveis',
+      max_new_tokens: Number(body.max_new_tokens || body.max_tokens || 180),
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`LocalModel ${response.status}: ${text.slice(0, 500)}`);
   }
 
-  return { content: enforceSingleQuestion(content), model, provider: 'huggingface' };
+  const data = await response.json();
+  const content = data?.content;
+  if (!content || typeof content !== 'string') {
+    throw new Error('Resposta invalida do modelo local fine-tuned');
+  }
+
+  return safeModelReply(content, body, data?.model || LOCAL_MODEL_NAME, 'local-finetuned');
 }
 
 function localTrainedReply(body) {
@@ -527,6 +583,14 @@ function localTrainedReply(body) {
   const grounded = groundedPropertyReply(body);
   if (grounded) return grounded;
 
+  if (!hasRealProperties(body)) {
+    return {
+      content: `${prefix}perfeito, obrigado pelas informacoes. Vou usar esses criterios para buscar somente opcoes reais compativeis. Se voce quiser, posso tambem chamar um corretor para continuar com voce.`,
+      model: 'local-trained-rules',
+      provider: 'local-trained',
+    };
+  }
+
   if (best?.assistant) {
     return {
       content: clampText(best.assistant, 700),
@@ -562,8 +626,20 @@ async function generateChat(body) {
     return huggingFaceChat(body);
   }
 
+  if (AI_PROVIDER === 'local_model' || AI_PROVIDER === 'finetuned') {
+    return localModelChat(body);
+  }
+
   if (AI_PROVIDER === 'local') {
     return localTrainedReply(body);
+  }
+
+  if (LOCAL_MODEL_BASE_URL) {
+    try {
+      return await localModelChat(body);
+    } catch (error) {
+      errors.push(`local_model: ${error.message}`);
+    }
   }
 
   try {
@@ -628,6 +704,18 @@ app.get('/health', requireAuth, async (_req, res) => {
       provider: 'local-trained',
       model: 'local-trained-rules',
       training: trainingHealth,
+    });
+  }
+
+  if (AI_PROVIDER === 'local_model' || AI_PROVIDER === 'finetuned') {
+    return res.json({
+      success: Boolean(LOCAL_MODEL_BASE_URL),
+      provider: 'local-finetuned',
+      model: LOCAL_MODEL_NAME,
+      configured: Boolean(LOCAL_MODEL_BASE_URL),
+      base_url: LOCAL_MODEL_BASE_URL || null,
+      training: trainingHealth,
+      error: LOCAL_MODEL_BASE_URL ? null : 'LOCAL_MODEL_BASE_URL not configured',
     });
   }
 
