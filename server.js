@@ -247,6 +247,31 @@ function appearsToInventPropertyWithoutContext(content) {
     || normalized.includes('tenho estas opcoes');
 }
 
+function appearsToConfuseLeadObjective(content, body) {
+  const text = normalizeText(content);
+  const lead = body?.lead && typeof body.lead === 'object' ? body.lead : {};
+  const objective = normalizeText(lead.objetivo_compra || lead.objective || '');
+
+  if (text.includes('exaple') || text.includes('example')) return true;
+
+  if (objective === 'aluguel') {
+    return text.includes('sua compra')
+      || text.includes('para sua compra')
+      || text.includes('comprar esse imovel')
+      || text.includes('valor de compra')
+      || text.includes('venda r');
+  }
+
+  if (objective === 'compra') {
+    return text.includes('seu aluguel')
+      || text.includes('para alugar')
+      || text.includes('aluguel mensal')
+      || text.includes('valor de aluguel');
+  }
+
+  return false;
+}
+
 function safeModelReply(content, body, model, provider) {
   if (!hasRealProperties(body) && appearsToInventPropertyWithoutContext(content)) {
     return {
@@ -264,6 +289,19 @@ function safeModelReply(content, body, model, provider) {
       provider: 'local-trained',
       fallback: true,
       warnings: [`${provider} response discarded because it added unprovided property details`],
+    };
+  }
+
+  if (appearsToConfuseLeadObjective(content, body)) {
+    const fallback = hasRealProperties(body)
+      ? (groundedPropertyReply(body) || localTrainedReply(body))
+      : localTrainedReply(body);
+
+    return {
+      ...fallback,
+      provider: 'local-trained',
+      fallback: true,
+      warnings: [`${provider} response discarded because it confused the lead objective`],
     };
   }
 
