@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+loadEnvFile(path.join(__dirname, 'runtime.env'));
 loadEnvFile(path.join(__dirname, '.env'));
 
 const app = express();

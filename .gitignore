@@ -9,6 +9,7 @@ __pycache__/
 .env
 .env.*
 !.env.example
+runtime.env
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
