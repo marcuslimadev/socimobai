@@ -3,7 +3,7 @@ models/
 runs/
 .cache/
 .tmp-*
-tools/ngrok/
+tools/
 __pycache__/
 *.pyc
 .env
