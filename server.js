@@ -20,6 +20,7 @@ const HF_MODEL = String(process.env.HF_MODEL || 'Qwen/Qwen2.5-7B-Instruct:fastes
 const LOCAL_MODEL_BASE_URL = String(process.env.LOCAL_MODEL_BASE_URL || '').replace(/\/$/, '');
 const LOCAL_MODEL_API_KEY = String(process.env.LOCAL_MODEL_API_KEY || '').trim();
 const LOCAL_MODEL_NAME = String(process.env.LOCAL_MODEL_NAME || 'socimobai-finetuned');
+const LOCAL_MODEL_TIMEOUT_MS = Number(process.env.LOCAL_MODEL_TIMEOUT_MS || 45000);
 const POLLINATIONS_BASE_URL = String(process.env.POLLINATIONS_BASE_URL || 'https://text.pollinations.ai/openai').replace(/\/$/, '');
 const POLLINATIONS_MODEL = String(process.env.POLLINATIONS_MODEL || 'openai');
 const POLLINATIONS_API_KEY = String(process.env.POLLINATIONS_API_KEY || '').trim();
@@ -539,12 +540,16 @@ async function localModelChat(body) {
   const response = await fetch(`${LOCAL_MODEL_BASE_URL}/chat`, {
     method: 'POST',
     headers,
+    signal: AbortSignal.timeout(Math.max(5000, LOCAL_MODEL_TIMEOUT_MS)),
     body: JSON.stringify({
       message: prompt.user,
       history: prompt.system,
       assistant_name: body.assistant_name || 'Teresa',
       company_name: body.company_name || 'Exclusiva Lar Imoveis',
-      max_new_tokens: Number(body.max_new_tokens || body.max_tokens || 180),
+      max_new_tokens: Math.max(
+        48,
+        Math.min(Number(body.max_new_tokens || body.max_tokens || 90), 120),
+      ),
     }),
   });
 
